@@ -449,8 +449,13 @@ class WeirdhostLogin:
             status_messages = {
                 "success": "✅ 续期成功",
                 "already_renewed": "⚠️ 已经续期过了",
+                "no_button_found": "❌ 未找到续期按钮",
+                "button_disabled": "❌ 续期按钮不可点击",
                 "login_failed": "❌ 登录失败", 
                 "error": "💥 运行出错",
+                "click_error": "💥 点击按钮出错",
+                "unknown_changed": "⚠️ 页面变化但结果未知",
+                "no_change": "⚠️ 页面无变化",
                 "error: no_auth": "❌ 无认证信息",
                 "error: no_servers": "❌ 无服务器配置",
                 "error: timeout": "⏰ 操作超时",
@@ -468,12 +473,15 @@ class WeirdhostLogin:
             
             # 添加每个服务器的结果
             for result in results:
-                if ":" in result:
+                if ":" in result and not result.startswith("error:"):
+                    # 正确分割服务器ID和状态
                     server_id, status = result.split(":", 1)
+                    server_id = server_id.strip()
                     status = status.strip()
                     status_msg = status_messages.get(status, f"❓ 未知状态 ({status})")
                     readme_content += f"- 服务器 `{server_id}`: {status_msg}\n"
                 else:
+                    # 处理错误状态
                     status_msg = status_messages.get(result, f"❓ 未知状态 ({result})")
                     readme_content += f"- {status_msg}\n"
             
