@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Weirdhost 登录脚本 - GitHub Actions 版本
-支持 Cookie 登录和邮箱密码登录两种方式
-支持多个服务器续期操作
+修正版 - 只有点击按钮后出现错误消息才表示已续期
 """
 
 import os
@@ -115,7 +114,7 @@ class WeirdhostLogin:
             
             # 点击登录并等待导航
             self.log("点击登录按钮...")
-            with page.expect_navigation(wait_until="domcontentloaded", timeout=60000):
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=90000):
                 page.click(login_button_selector)
             
             # 检查登录是否成功
@@ -140,7 +139,7 @@ class WeirdhostLogin:
             page.goto(server_url, wait_until="domcontentloaded")
             
             # 等待页面加载
-            time.sleep(3)
+            time.sleep(5)
             
             # 查找 "시간추가" 按钮
             add_button_selector = 'button:has-text("시간추가")'
@@ -150,8 +149,8 @@ class WeirdhostLogin:
             add_button = page.locator(add_button_selector)
             
             try:
-                # 等待按钮出现，但不要等太久
-                add_button.wait_for(state='visible', timeout=10000)
+                # 等待按钮出现
+                add_button.wait_for(state='visible', timeout=30000)
                 
                 # 检查按钮是否可点击
                 if add_button.is_enabled():
@@ -160,51 +159,42 @@ class WeirdhostLogin:
                     self.log("✅ 成功点击 '시간추가' 按钮")
                     
                     # 等待页面响应
-                    time.sleep(3)
+                    time.sleep(5)
                     
                     # 检查是否出现重复续期的错误提示
                     error_messages = [
-                        "You can't renew your server currently",
-                        "you can only once at one time period",
-                        "Request failed with status code 400"
+                        "You can't renew your server currently, because you can only once at one time period.",
+                        "already renewed",
+                        "can't renew",
+                        "only once"
                     ]
                     
                     page_content = page.content().lower()
+                    has_error = False
                     for error_msg in error_messages:
                         if error_msg.lower() in page_content:
-                            self.log("ℹ️  检测到重复续期提示，今天已经续期过了")
-                            return "already_renewed"  # 返回特殊状态
+                            self.log(f"ℹ️  检测到重复续期提示: {error_msg}")
+                            has_error = True
+                            break
                     
-                    # 检查页面是否有错误提示元素
-                    error_selectors = [
-                        '.alert-danger',
-                        '.error',
-                        '[class*="error"]',
-                        '.notification.is-danger'
-                    ]
-                    
-                    for selector in error_selectors:
-                        if page.locator(selector).is_visible(timeout=2000):
-                            error_text = page.locator(selector).text_content()
-                            if "can't renew" in error_text.lower() or "only once" in error_text.lower():
-                                self.log(f"ℹ️  检测到续期限制提示: {error_text}")
-                                return "already_renewed"  # 返回特殊状态
-                    
-                    self.log("✅ 续期操作完成！")
-                    return "success"  # 返回成功状态
+                    if has_error:
+                        return "already_renewed"
+                    else:
+                        self.log("✅ 续期操作完成！没有检测到错误消息")
+                        return "success"
                 else:
-                    self.log("⚠️  '시간추가' 按钮存在但不可点击（可能今天已经续期过了）")
-                    return "already_renewed"  # 返回特殊状态
+                    # 按钮不可点击，认为是错误状态
+                    self.log("❌ '시간추가' 按钮不可点击，可能是页面状态异常")
+                    return "error"
                     
             except Exception:
-                # 按钮不存在或不可见
-                self.log("⚠️  未找到 '시간추가' 按钮（可能今天已经续期过了或按钮不可用）")
-                return "already_renewed"  # 返回特殊状态
+                # 按钮不存在，认为是错误状态
+                self.log("❌ 未找到 '시간추가' 按钮，可能是页面状态异常")
+                return "error"
             
         except Exception as e:
-            self.log(f"⚠️  续期操作遇到问题: {e}")
-            self.log("ℹ️  这通常是正常情况，可能今天已经续期过了")
-            return "already_renewed"  # 返回特殊状态
+            self.log(f"❌ 续期操作遇到问题: {e}")
+            return "error"
     
     def process_server(self, page, server_url):
         """处理单个服务器的续期操作"""
@@ -265,7 +255,7 @@ class WeirdhostLogin:
                 
                 # 创建页面
                 page = context.new_page()
-                page.set_default_timeout(30000)
+                page.set_default_timeout(90000)
                 
                 login_success = False
                 
@@ -301,7 +291,7 @@ class WeirdhostLogin:
                         self.log(f"服务器处理结果: {result}")
                         
                         # 在处理下一个服务器前等待一下
-                        time.sleep(2)
+                        time.sleep(5)
                 else:
                     self.log("❌ 所有登录方式都失败了", "ERROR")
                     results = ["login_failed"] * len(self.server_list)
