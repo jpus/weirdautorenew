@@ -132,70 +132,201 @@ class WeirdhostLogin:
     def add_server_time(self, page, server_url):
         """添加服务器时间（续期）"""
         try:
-            self.log(f"开始执行续期操作: {server_url}")
+            server_id = server_url.split('/')[-1]
+            self.log(f"开始处理服务器 {server_id}")
             
-            # 访问服务器页面
+            # 访问服务器页面 - 使用更严格的等待条件
             self.log(f"访问服务器页面: {server_url}")
-            page.goto(server_url, wait_until="domcontentloaded")
+            page.goto(server_url, wait_until="networkidle")
             
-            # 等待页面加载
-            time.sleep(5)
+            # 多重等待策略确保页面完全加载
+            self.wait_for_page_ready(page, server_id)
             
-            # 查找 "시간추가" 按钮
-            add_button_selector = 'button:has-text("시간추가")'
-            self.log(f"正在查找 '{add_button_selector}' 按钮...")
+            # 使用更可靠的查找方法
+            button = self.find_renew_button(page, server_id)
             
-            # 检查按钮是否存在且可见
-            add_button = page.locator(add_button_selector)
+            if not button:
+                return f"{server_id}: no_button_found"
             
-            try:
-                # 等待按钮出现
-                add_button.wait_for(state='visible', timeout=30000)
+            # 点击按钮并处理结果
+            return self.click_and_check_result(page, button, server_id)
                 
-                # 检查按钮是否可点击
-                if add_button.is_enabled():
-                    # 点击按钮
-                    add_button.click()
-                    self.log("✅ 成功点击 '시간추가' 按钮")
-                    
-                    # 等待页面响应
-                    time.sleep(5)
-                    
-                    # 检查是否出现重复续期的错误提示
-                    error_messages = [
-                        "You can't renew your server currently, because you can only once at one time period.",
-                        "already renewed",
-                        "can't renew",
-                        "only once"
-                    ]
-                    
-                    page_content = page.content().lower()
-                    has_error = False
-                    for error_msg in error_messages:
-                        if error_msg.lower() in page_content:
-                            self.log(f"ℹ️  检测到重复续期提示: {error_msg}")
-                            has_error = True
-                            break
-                    
-                    if has_error:
-                        return "already_renewed"
-                    else:
-                        self.log("✅ 续期操作完成！没有检测到错误消息")
-                        return "success"
-                else:
-                    # 按钮不可点击，认为是错误状态
-                    self.log("❌ '시간추가' 按钮不可点击，可能是页面状态异常")
-                    return "error"
-                    
-            except Exception:
-                # 按钮不存在，认为是错误状态
-                self.log("❌ 未找到 '시간추가' 按钮，可能是页面状态异常")
-                return "error"
-            
         except Exception as e:
-            self.log(f"❌ 续期操作遇到问题: {e}")
-            return "error"
-    
+            self.log(f"❌ 服务器 {server_id} 处理过程中出错: {e}")
+            return f"{server_id}: error"
+
+    def wait_for_page_ready(self, page, server_id):
+        """等待页面完全就绪"""
+        # 等待主要内容区域加载
+        try:
+            page.wait_for_selector('.server-details, .server-info, .card, .panel', timeout=10000)
+            self.log(f"✅ 服务器 {server_id} 主要内容已加载")
+        except:
+            self.log(f"⚠️ 服务器 {server_id} 未找到主要内容区域")
+        
+        # 等待所有图片加载完成
+        try:
+            page.wait_for_load_state('networkidle', timeout=15000)
+            self.log(f"✅ 服务器 {server_id} 网络空闲")
+        except:
+            self.log(f"⚠️ 服务器 {server_id} 网络未完全空闲")
+        
+        # 额外等待时间确保动态内容加载
+        time.sleep(3)
+
+    def find_renew_button(self, page, server_id):
+        """查找续期按钮 - 使用多种方法"""
+        selectors = [
+            'button:has-text("시간추가")',
+            'button:has-text("시간 추가")',
+            '//button[contains(text(), "시간추가")]',
+            '//button[contains(text(), "시간 추가")]',
+        ]
+        
+        for selector in selectors:
+            try:
+                if selector.startswith('//'):
+                    button = page.locator(f'xpath={selector}')
+                else:
+                    button = page.locator(selector)
+                
+                # 使用更严格的可见性检查
+                button.wait_for(state='visible', timeout=10000)
+                
+                if button.is_visible():
+                    self.log(f"✅ 服务器 {server_id} 找到按钮: {selector}")
+                    return button
+                    
+            except Exception as e:
+                continue
+        
+        # 如果上述方法都失败，尝试更广泛的搜索
+        return self.find_button_alternative_methods(page, server_id)
+
+    def find_button_alternative_methods(self, page, server_id):
+        """备用的按钮查找方法"""
+        # 方法1: 查找所有按钮并筛选
+        try:
+            all_buttons = page.locator('button')
+            button_count = all_buttons.count()
+            
+            for i in range(button_count):
+                try:
+                    button = all_buttons.nth(i)
+                    if button.is_visible():
+                        text = button.text_content().strip()
+                        if "시간" in text:
+                            self.log(f"✅ 服务器 {server_id} 通过文本搜索找到按钮: '{text}'")
+                            return button
+                except:
+                    continue
+        except:
+            pass
+        
+        # 方法2: 查找特定class的按钮
+        try:
+            primary_buttons = page.locator('button.btn-primary, button.btn-success')
+            if primary_buttons.count() > 0:
+                button = primary_buttons.first
+                if button.is_visible():
+                    self.log(f"✅ 服务器 {server_id} 通过class找到主要按钮")
+                    return button
+        except:
+            pass
+        
+        # 方法3: 执行JavaScript查找
+        try:
+            button = page.evaluate_handle('''() => {
+                const buttons = Array.from(document.querySelectorAll('button'));
+                return buttons.find(btn => 
+                    btn.offsetParent !== null && 
+                    btn.textContent.includes('시간')
+                );
+            }''')
+            
+            if button:
+                self.log(f"✅ 服务器 {server_id} 通过JavaScript找到按钮")
+                return button
+        except:
+            pass
+        
+        self.log(f"❌ 服务器 {server_id} 所有方法都未找到按钮")
+        return None
+
+    def click_and_check_result(self, page, button, server_id):
+        """点击按钮并检查结果"""
+        try:
+            if button.is_enabled():
+                # 点击前保存页面状态用于比较
+                before_click = page.content()
+                
+                self.log(f"✅ 服务器 {server_id} 按钮可点击，正在点击...")
+                button.click()
+                
+                # 等待页面响应
+                time.sleep(5)
+                
+                # 检查页面变化
+                after_click = page.content()
+                
+                # 检查是否出现错误消息
+                error_patterns = [
+                    "already renewed", "can't renew", "only once", 
+                    "이미", "한번", "불가능"
+                ]
+                
+                has_error = any(pattern in after_click.lower() for pattern in error_patterns)
+                
+                if has_error:
+                    self.log(f"ℹ️ 服务器 {server_id} 检测到重复续期提示")
+                    return f"{server_id}: already_renewed"
+                else:
+                    # 检查是否有成功消息
+                    success_patterns = ["success", "성공", "added", "추가됨"]
+                    has_success = any(pattern in after_click.lower() for pattern in success_patterns)
+                    
+                    if has_success:
+                        self.log(f"✅ 服务器 {server_id} 续期成功")
+                        return f"{server_id}: success"
+                    else:
+                        # 检查页面内容是否发生变化
+                        if before_click != after_click:
+                            self.log(f"⚠️ 服务器 {server_id} 页面已变化但无明确结果")
+                            return f"{server_id}: unknown_changed"
+                        else:
+                            self.log(f"⚠️ 服务器 {server_id} 页面无变化")
+                            return f"{server_id}: no_change"
+            else:
+                self.log(f"❌ 服务器 {server_id} 按钮不可点击")
+                return f"{server_id}: button_disabled"
+                
+        except Exception as e:
+            self.log(f"❌ 服务器 {server_id} 点击按钮时出错: {e}")
+            return f"{server_id}: click_error"
+
+    def debug_element_visibility(self, page, server_id):
+        """调试元素可见性"""
+        self.log(f"🔍 调试服务器 {server_id} 的元素可见性")
+        
+        # 检查按钮的各种状态
+        selectors = ['button:has-text("시간추가")', 'button:has-text("시간 추가")']
+        
+        for selector in selectors:
+            try:
+                element = page.locator(selector)
+                count = element.count()
+                visible = element.is_visible() if count > 0 else False
+                enabled = element.is_enabled() if count > 0 else False
+                
+                self.log(f"选择器 '{selector}': count={count}, visible={visible}, enabled={enabled}")
+                
+                if count > 0:
+                    text = element.first.text_content().strip()
+                    self.log(f"  文本内容: '{text}'")
+                    
+            except Exception as e:
+                self.log(f"选择器 '{selector}' 检查失败: {e}")
+                    
     def process_server(self, page, server_url):
         """处理单个服务器的续期操作"""
         server_id = server_url.split('/')[-1] if server_url else "unknown"
@@ -204,7 +335,10 @@ class WeirdhostLogin:
         try:
             # 访问服务器页面
             self.log(f"访问服务器页面: {server_url}")
-            page.goto(server_url, wait_until="domcontentloaded")
+            page.goto(server_url, wait_until="networkidle")
+            
+            # 添加详细的调试信息
+            self.debug_element_visibility(page, server_id)
             
             # 检查是否已登录
             if not self.check_login_status(page):
