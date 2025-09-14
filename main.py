@@ -347,7 +347,7 @@ class WeirdhostLogin:
             
             # 执行续期操作
             result = self.add_server_time(page, server_url)
-            return f"{server_id}: {result}"
+            return result  # 直接返回结果，不要再次添加 server_id
             
         except Exception as e:
             self.log(f"处理服务器 {server_id} 时出错: {e}", "ERROR")
@@ -481,6 +481,13 @@ class WeirdhostLogin:
                     parts = result.split(":", 1)
                     server_id = parts[0].strip()
                     status = parts[1].strip() if len(parts) > 1 else "unknown"
+                    # 检查状态是否包含服务器ID
+                    if ":" in status:
+                        # 如果状态中还包含冒号，说明分割有问题，重新处理
+                        status_parts = status.split(":", 1)
+                        server_id = f"{server_id}:{status_parts[0]}"
+                        status = status_parts[1].strip() if len(status_parts) > 1 else "unknown"
+                        
                     status_msg = status_messages.get(status, f"❓ 未知状态 ({status})")
                     readme_content += f"- 服务器 `{server_id}`: {status_msg}\n"
                 else:
