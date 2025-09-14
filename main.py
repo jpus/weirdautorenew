@@ -443,7 +443,10 @@ class WeirdhostLogin:
     def write_readme_file(self, results):
         """写入README文件"""
         try:
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            # 获取东八区时间
+            from datetime import datetime, timezone, timedelta
+            beijing_time = datetime.now(timezone(timedelta(hours=8)))
+            timestamp = beijing_time.strftime('%Y-%m-%d %H:%M:%S')
             
             # 状态消息映射
             status_messages = {
@@ -465,7 +468,7 @@ class WeirdhostLogin:
             # 创建README内容
             readme_content = f"""# Weirdhost 自动续期脚本
 
-**最后运行时间**: `{timestamp}`
+**最后运行时间**: `{timestamp}` (北京时间)
 
 ## 运行结果
 
@@ -475,9 +478,9 @@ class WeirdhostLogin:
             for result in results:
                 if ":" in result and not result.startswith("error:"):
                     # 正确分割服务器ID和状态
-                    server_id, status = result.split(":", 1)
-                    server_id = server_id.strip()
-                    status = status.strip()
+                    parts = result.split(":", 1)
+                    server_id = parts[0].strip()
+                    status = parts[1].strip() if len(parts) > 1 else "unknown"
                     status_msg = status_messages.get(status, f"❓ 未知状态 ({status})")
                     readme_content += f"- 服务器 `{server_id}`: {status_msg}\n"
                 else:
