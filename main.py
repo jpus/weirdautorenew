@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Weirdhost 登录脚本 - GitHub Actions 版本
-修正版 - 只有点击按钮后出现错误消息才表示已续期
+Weirdhost 续期和启动脚本 - GitHub Actions 版本
+合并版本：先续期后启动
 """
 
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from playwright.sync_api import sync_playwright, TimeoutError
 
 
-class WeirdhostLogin:
+class WeirdhostAuto:
     def __init__(self):
         """初始化，从环境变量读取配置"""
         self.url = os.getenv('WEIRDHOST_URL', 'https://hub.weirdhost.xyz')
@@ -31,6 +31,9 @@ class WeirdhostLogin:
         self.server_list = []
         if self.server_urls:
             self.server_list = [url.strip() for url in self.server_urls.split(',') if url.strip()]
+        
+        # 存储每个服务器的结果
+        self.server_results = {}
     
     def log(self, message, level="INFO"):
         """日志输出"""
@@ -129,34 +132,10 @@ class WeirdhostLogin:
             self.log(f"邮箱密码登录时出错: {e}", "ERROR")
             return False
     
-    def add_server_time(self, page, server_url):
-        """添加服务器时间（续期）"""
-        try:
-            server_id = server_url.split('/')[-1]
-            self.log(f"开始处理服务器 {server_id}")
-            
-            # 访问服务器页面 - 使用更严格的等待条件
-            self.log(f"访问服务器页面: {server_url}")
-            page.goto(server_url, wait_until="networkidle")
-            
-            # 多重等待策略确保页面完全加载
-            self.wait_for_page_ready(page, server_id)
-            
-            # 使用更可靠的查找方法
-            button = self.find_renew_button(page, server_id)
-            
-            if not button:
-                return f"{server_id}: no_button_found"
-            
-            # 点击按钮并处理结果
-            return self.click_and_check_result(page, button, server_id)
-                
-        except Exception as e:
-            self.log(f"❌ 服务器 {server_id} 处理过程中出错: {e}")
-            return f"{server_id}: error"
-
-    def wait_for_page_ready(self, page, server_id):
+    def wait_for_page_ready(self, page, server_id, operation="操作"):
         """等待页面完全就绪"""
+        self.log(f"等待服务器 {server_id} {operation}页面加载...")
+        
         # 等待主要内容区域加载
         try:
             page.wait_for_selector('.server-details, .server-info, .card, .panel', timeout=10000)
@@ -172,8 +151,8 @@ class WeirdhostLogin:
             self.log(f"⚠️ 服务器 {server_id} 网络未完全空闲")
         
         # 额外等待时间确保动态内容加载
-        time.sleep(3)
-
+        time.sleep(2)
+    
     def find_renew_button(self, page, server_id):
         """查找续期按钮 - 使用多种方法"""
         selectors = [
@@ -191,19 +170,47 @@ class WeirdhostLogin:
                     button = page.locator(selector)
                 
                 # 使用更严格的可见性检查
-                button.wait_for(state='visible', timeout=10000)
+                button.wait_for(state='visible', timeout=5000)
                 
                 if button.is_visible():
-                    self.log(f"✅ 服务器 {server_id} 找到按钮: {selector}")
+                    self.log(f"✅ 服务器 {server_id} 找到续期按钮: {selector}")
                     return button
                     
             except Exception as e:
                 continue
         
         # 如果上述方法都失败，尝试更广泛的搜索
-        return self.find_button_alternative_methods(page, server_id)
-
-    def find_button_alternative_methods(self, page, server_id):
+        return self.find_button_alternative_methods(page, server_id, ["시간"])
+    
+    def find_start_button(self, page, server_id):
+        """查找启动按钮 - 完全匹配 Start"""
+        selectors = [
+            'button:has-text("Start")',
+            '//button[text()="Start"]',
+            'button:has-text("Start Server")',
+        ]
+        
+        for selector in selectors:
+            try:
+                if selector.startswith('//'):
+                    button = page.locator(f'xpath={selector}')
+                else:
+                    button = page.locator(selector)
+                
+                # 使用更严格的可见性检查
+                button.wait_for(state='visible', timeout=5000)
+                
+                if button.is_visible():
+                    self.log(f"✅ 服务器 {server_id} 找到启动按钮: {selector}")
+                    return button
+                    
+            except Exception as e:
+                continue
+        
+        # 如果上述方法都失败，尝试更广泛的搜索
+        return self.find_button_alternative_methods(page, server_id, ["Start"], exact_match=True)
+    
+    def find_button_alternative_methods(self, page, server_id, keywords, exact_match=False):
         """备用的按钮查找方法"""
         # 方法1: 查找所有按钮并筛选
         try:
@@ -215,9 +222,17 @@ class WeirdhostLogin:
                     button = all_buttons.nth(i)
                     if button.is_visible():
                         text = button.text_content().strip()
-                        if "시간" in text:
-                            self.log(f"✅ 服务器 {server_id} 通过文本搜索找到按钮: '{text}'")
-                            return button
+                        
+                        if exact_match:
+                            # 完全匹配
+                            if any(keyword == text for keyword in keywords):
+                                self.log(f"✅ 服务器 {server_id} 通过文本搜索找到按钮: '{text}'")
+                                return button
+                        else:
+                            # 包含匹配
+                            if any(keyword in text for keyword in keywords):
+                                self.log(f"✅ 服务器 {server_id} 通过文本搜索找到按钮: '{text}'")
+                                return button
                 except:
                     continue
         except:
@@ -225,42 +240,62 @@ class WeirdhostLogin:
         
         # 方法2: 查找特定class的按钮
         try:
-            primary_buttons = page.locator('button.btn-primary, button.btn-success')
+            primary_buttons = page.locator('button.btn-primary, button.btn-success, button.btn-info')
             if primary_buttons.count() > 0:
-                button = primary_buttons.first
-                if button.is_visible():
-                    self.log(f"✅ 服务器 {server_id} 通过class找到主要按钮")
-                    return button
-        except:
-            pass
-        
-        # 方法3: 执行JavaScript查找
-        try:
-            button = page.evaluate_handle('''() => {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                return buttons.find(btn => 
-                    btn.offsetParent !== null && 
-                    btn.textContent.includes('시간')
-                );
-            }''')
-            
-            if button:
-                self.log(f"✅ 服务器 {server_id} 通过JavaScript找到按钮")
-                return button
+                for i in range(primary_buttons.count()):
+                    button = primary_buttons.nth(i)
+                    if button.is_visible():
+                        text = button.text_content().strip()
+                        
+                        if exact_match:
+                            if any(keyword == text for keyword in keywords):
+                                self.log(f"✅ 服务器 {server_id} 通过class找到按钮")
+                                return button
+                        else:
+                            if any(keyword in text for keyword in keywords):
+                                self.log(f"✅ 服务器 {server_id} 通过class找到按钮")
+                                return button
         except:
             pass
         
         self.log(f"❌ 服务器 {server_id} 所有方法都未找到按钮")
         return None
-
-    def click_and_check_result(self, page, button, server_id):
-        """点击按钮并检查结果"""
+    
+    def renew_server(self, page, server_url):
+        """续期服务器"""
+        try:
+            server_id = server_url.split('/')[-1]
+            self.log(f"📅 开始续期服务器 {server_id}")
+            
+            # 访问服务器页面
+            self.log(f"访问服务器页面: {server_url}")
+            page.goto(server_url, wait_until="networkidle")
+            
+            # 等待页面加载
+            self.wait_for_page_ready(page, server_id, "续期")
+            
+            # 查找续期按钮
+            button = self.find_renew_button(page, server_id)
+            
+            if not button:
+                self.log(f"❌ 服务器 {server_id} 未找到续期按钮")
+                return "no_renew_button"
+            
+            # 点击按钮并检查结果
+            return self.click_renew_button_and_check(page, button, server_id)
+                
+        except Exception as e:
+            self.log(f"❌ 服务器 {server_id} 续期过程中出错: {e}")
+            return "renew_error"
+    
+    def click_renew_button_and_check(self, page, button, server_id):
+        """点击续期按钮并检查结果"""
         try:
             if button.is_enabled():
                 # 点击前保存页面状态用于比较
                 before_click = page.content()
                 
-                self.log(f"✅ 服务器 {server_id} 按钮可点击，正在点击...")
+                self.log(f"✅ 服务器 {server_id} 续期按钮可点击，正在点击...")
                 button.click()
                 
                 # 等待页面响应
@@ -272,90 +307,143 @@ class WeirdhostLogin:
                 # 检查是否出现错误消息
                 error_patterns = [
                     "already renewed", "can't renew", "only once", 
-                    "이미", "한번", "불가능"
+                    "이미", "한번", "불가능", "already added"
                 ]
                 
-                has_error = any(pattern in after_click.lower() for pattern in error_patterns)
+                has_error = any(pattern.lower() in after_click.lower() for pattern in error_patterns)
                 
                 if has_error:
                     self.log(f"ℹ️ 服务器 {server_id} 检测到重复续期提示")
-                    return f"{server_id}: already_renewed"
+                    return "already_renewed"
                 else:
                     # 检查是否有成功消息
-                    success_patterns = ["success", "성공", "added", "추가됨"]
-                    has_success = any(pattern in after_click.lower() for pattern in success_patterns)
+                    success_patterns = ["success", "성공", "added", "추가됨", "시간이 추가"]
+                    has_success = any(pattern.lower() in after_click.lower() for pattern in success_patterns)
                     
                     if has_success:
                         self.log(f"✅ 服务器 {server_id} 续期成功")
-                        return f"{server_id}: success"
+                        return "renew_success"
                     else:
                         # 检查页面内容是否发生变化
                         if before_click != after_click:
                             self.log(f"⚠️ 服务器 {server_id} 页面已变化但无明确结果")
-                            return f"{server_id}: unknown_changed"
+                            return "renew_unknown_changed"
                         else:
                             self.log(f"⚠️ 服务器 {server_id} 页面无变化")
-                            return f"{server_id}: no_change"
+                            return "renew_no_change"
             else:
-                self.log(f"❌ 服务器 {server_id} 按钮不可点击")
-                return f"{server_id}: button_disabled"
+                self.log(f"❌ 服务器 {server_id} 续期按钮不可点击")
+                return "renew_button_disabled"
                 
         except Exception as e:
-            self.log(f"❌ 服务器 {server_id} 点击按钮时出错: {e}")
-            return f"{server_id}: click_error"
-
-    def debug_element_visibility(self, page, server_id):
-        """调试元素可见性"""
-        self.log(f"🔍 调试服务器 {server_id} 的元素可见性")
-        
-        # 检查按钮的各种状态
-        selectors = ['button:has-text("시간추가")', 'button:has-text("시간 추가")']
-        
-        for selector in selectors:
-            try:
-                element = page.locator(selector)
-                count = element.count()
-                visible = element.is_visible() if count > 0 else False
-                enabled = element.is_enabled() if count > 0 else False
+            self.log(f"❌ 服务器 {server_id} 点击续期按钮时出错: {e}")
+            return "renew_click_error"
+    
+    def start_server(self, page, server_url):
+        """启动服务器"""
+        try:
+            server_id = server_url.split('/')[-1]
+            self.log(f"🚀 开始启动服务器 {server_id}")
+            
+            # 刷新页面确保最新状态
+            page.reload(wait_until="networkidle")
+            
+            # 等待页面加载
+            self.wait_for_page_ready(page, server_id, "启动")
+            
+            # 查找启动按钮
+            button = self.find_start_button(page, server_id)
+            
+            if not button:
+                self.log(f"❌ 服务器 {server_id} 未找到Start按钮")
+                return "no_start_button"
+            
+            # 检查按钮状态并处理
+            if button.is_enabled():
+                self.log(f"✅ 服务器 {server_id} 可以启动，正在点击...")
+                button.click()
                 
-                self.log(f"选择器 '{selector}': count={count}, visible={visible}, enabled={enabled}")
+                # 等待操作完成
+                time.sleep(5)
                 
-                if count > 0:
-                    text = element.first.text_content().strip()
-                    self.log(f"  文本内容: '{text}'")
-                    
-            except Exception as e:
-                self.log(f"选择器 '{selector}' 检查失败: {e}")
-                    
+                # 检查是否启动成功
+                # 重新查找按钮，检查是否变为不可用或其他状态
+                try:
+                    new_button = self.find_start_button(page, server_id)
+                    if new_button and not new_button.is_enabled():
+                        self.log(f"✅ 服务器 {server_id} 启动成功，按钮状态已变化")
+                        return "start_success"
+                    else:
+                        # 检查是否有成功消息
+                        page_content = page.content().lower()
+                        if "started" in page_content or "running" in page_content or "启动" in page_content:
+                            self.log(f"✅ 服务器 {server_id} 启动成功")
+                            return "start_success"
+                        else:
+                            self.log(f"⚠️ 服务器 {server_id} 启动操作完成，但状态未知")
+                            return "start_unknown"
+                except:
+                    self.log(f"⚠️ 服务器 {server_id} 启动操作完成，无法验证状态")
+                    return "start_unknown"
+            else:
+                self.log(f"ℹ️ 服务器 {server_id} 已启动，按钮不可点击")
+                return "already_started"
+                
+        except Exception as e:
+            self.log(f"❌ 服务器 {server_id} 启动过程中出错: {e}")
+            return "start_error"
+    
     def process_server(self, page, server_url):
-        """处理单个服务器的续期操作"""
+        """处理单个服务器的续期和启动操作"""
         server_id = server_url.split('/')[-1] if server_url else "unknown"
-        self.log(f"开始处理服务器 {server_id}")
+        self.log(f"🔧 开始处理服务器 {server_id}")
+        
+        # 初始化服务器结果
+        self.server_results[server_id] = {
+            'renew_status': '未执行',
+            'start_status': '未执行'
+        }
         
         try:
             # 访问服务器页面
             self.log(f"访问服务器页面: {server_url}")
             page.goto(server_url, wait_until="networkidle")
             
-            # 添加详细的调试信息
-            self.debug_element_visibility(page, server_id)
-            
             # 检查是否已登录
             if not self.check_login_status(page):
                 self.log(f"服务器 {server_id} 未登录，尝试重新登录", "WARNING")
+                self.server_results[server_id]['renew_status'] = 'login_failed'
+                self.server_results[server_id]['start_status'] = 'login_failed'
                 return f"{server_id}: login_failed"
             
-            # 执行续期操作
-            result = self.add_server_time(page, server_url)
-            return result  # 直接返回结果，不要再次添加 server_id
+            # 第一步：执行续期操作
+            self.log(f"第一步：执行续期操作")
+            renew_result = self.renew_server(page, server_url)
+            self.server_results[server_id]['renew_status'] = renew_result
+            
+            # 等待一下，确保续期操作完成
+            time.sleep(3)
+            
+            # 第二步：执行启动操作
+            self.log(f"第二步：执行启动操作")
+            start_result = self.start_server(page, server_url)
+            self.server_results[server_id]['start_status'] = start_result
+            
+            # 返回组合结果
+            combined_result = f"renew:{renew_result},start:{start_result}"
+            self.log(f"✅ 服务器 {server_id} 处理完成: {combined_result}")
+            
+            return f"{server_id}: {combined_result}"
             
         except Exception as e:
-            self.log(f"处理服务器 {server_id} 时出错: {e}", "ERROR")
+            self.log(f"❌ 处理服务器 {server_id} 时出错: {e}", "ERROR")
+            self.server_results[server_id]['renew_status'] = 'error'
+            self.server_results[server_id]['start_status'] = 'error'
             return f"{server_id}: error"
     
     def run(self):
         """主运行函数"""
-        self.log("开始 Weirdhost 自动续期任务")
+        self.log("开始 Weirdhost 自动续期和启动任务")
         
         # 检查认证信息
         has_cookie = self.has_cookie_auth()
@@ -444,21 +532,34 @@ class WeirdhostLogin:
         """写入README文件"""
         try:
             # 获取东八区时间
-            from datetime import datetime, timezone, timedelta
             beijing_time = datetime.now(timezone(timedelta(hours=8)))
             timestamp = beijing_time.strftime('%Y-%m-%d %H:%M:%S')
             
             # 状态消息映射
             status_messages = {
-                "success": "✅ 续期成功",
-                "already_renewed": "⚠️ 已经续期过了",
-                "no_button_found": "❌ 未找到续期按钮",
-                "button_disabled": "❌ 续期按钮不可点击",
-                "login_failed": "❌ 登录失败", 
+                # 续期状态
+                "renew_success": "✅ 续期成功",
+                "already_renewed": "🔄 已经续期过",
+                "no_renew_button": "❌ 未找到续期按钮",
+                "renew_button_disabled": "❌ 续期按钮不可用",
+                "renew_unknown_changed": "⚠️ 续期页面变化但结果未知",
+                "renew_no_change": "⚠️ 续期页面无变化",
+                "renew_click_error": "💥 点击续期按钮出错",
+                "renew_error": "💥 续期过程出错",
+                
+                # 启动状态
+                "start_success": "✅ 启动成功",
+                "already_started": "🔄 已经启动",
+                "no_start_button": "❌ 未找到Start按钮",
+                "start_unknown": "⚠️ 启动完成但状态未知",
+                "start_error": "💥 启动过程出错",
+                
+                # 通用状态
+                "login_failed": "❌ 登录失败",
                 "error": "💥 运行出错",
-                "click_error": "💥 点击按钮出错",
-                "unknown_changed": "⚠️ 页面变化但结果未知",
-                "no_change": "⚠️ 页面无变化",
+                "未执行": "⏸️ 未执行",
+                
+                # 错误状态
                 "error: no_auth": "❌ 无认证信息",
                 "error: no_servers": "❌ 无服务器配置",
                 "error: timeout": "⏰ 操作超时",
@@ -466,34 +567,53 @@ class WeirdhostLogin:
             }
             
             # 创建README内容
-            readme_content = f"""# Weirdhost 自动续期脚本
+            readme_content = f"""# Weirdhost 自动续期和启动脚本
 
 **最后运行时间**: `{timestamp}` (北京时间)
 
 ## 运行结果
 
+| 服务器ID | 续期状态 | 启动状态 |
+|----------|----------|----------|
 """
             
-            # 添加每个服务器的结果
-            for result in results:
-                if ":" in result and not result.startswith("error:"):
-                    # 正确分割服务器ID和状态
-                    parts = result.split(":", 1)
-                    server_id = parts[0].strip()
-                    status = parts[1].strip() if len(parts) > 1 else "unknown"
-                    # 检查状态是否包含服务器ID
-                    if ":" in status:
-                        # 如果状态中还包含冒号，说明分割有问题，重新处理
-                        status_parts = status.split(":", 1)
-                        server_id = f"{server_id}:{status_parts[0]}"
-                        status = status_parts[1].strip() if len(status_parts) > 1 else "unknown"
-                        
-                    status_msg = status_messages.get(status, f"❓ 未知状态 ({status})")
-                    readme_content += f"- 服务器 `{server_id}`: {status_msg}\n"
-                else:
-                    # 处理错误状态
-                    status_msg = status_messages.get(result, f"❓ 未知状态 ({result})")
-                    readme_content += f"- {status_msg}\n"
+            # 添加每个服务器的结果表格
+            for server_id, status in self.server_results.items():
+                renew_msg = status_messages.get(status['renew_status'], f"❓ {status['renew_status']}")
+                start_msg = status_messages.get(status['start_status'], f"❓ {status['start_status']}")
+                readme_content += f"| `{server_id}` | {renew_msg} | {start_msg} |\n"
+            
+            # 如果没有服务器结果，显示错误信息
+            if not self.server_results:
+                for result in results:
+                    if ":" in result and not result.startswith("error:"):
+                        parts = result.split(":", 1)
+                        server_id = parts[0].strip()
+                        status = parts[1].strip() if len(parts) > 1 else "unknown"
+                        status_msg = status_messages.get(status, f"❓ 未知状态 ({status})")
+                        readme_content += f"| `{server_id}` | {status_msg} | N/A |\n"
+                    else:
+                        status_msg = status_messages.get(result, f"❓ 未知状态 ({result})")
+                        readme_content += f"| 未知 | {status_msg} | N/A |\n"
+            
+            # 添加统计信息
+            total_servers = len(self.server_list)
+            successful_renews = sum(1 for s in self.server_results.values() 
+                                  if s['renew_status'] in ['renew_success', 'already_renewed'])
+            successful_starts = sum(1 for s in self.server_results.values() 
+                                  if s['start_status'] in ['start_success', 'already_started'])
+            
+            readme_content += f"""
+## 统计信息
+
+- 总服务器数: {total_servers}
+- 成功续期: {successful_renews}/{total_servers}
+- 成功启动: {successful_starts}/{total_servers}
+- 运行时间: {timestamp}
+
+> 注意：如果续期状态显示"已经续期过"，表示今天已经续期过了，这是正常情况。
+> 脚本每天运行一次即可，多次运行不会有额外效果。
+"""
             
             # 写入README文件
             with open('README.md', 'w', encoding='utf-8') as f:
@@ -507,14 +627,14 @@ class WeirdhostLogin:
 
 def main():
     """主函数"""
-    print("🚀 Weirdhost 自动续期脚本启动")
+    print("🚀 Weirdhost 自动续期和启动脚本启动")
     print("=" * 50)
     
-    # 创建登录器
-    login = WeirdhostLogin()
+    # 创建自动操作器
+    auto = WeirdhostAuto()
     
     # 检查环境变量
-    if not login.has_cookie_auth() and not login.has_email_auth():
+    if not auto.has_cookie_auth() and not auto.has_email_auth():
         print("❌ 错误：未设置认证信息！")
         print("\n请在 GitHub Secrets 中设置以下任一组合：")
         print("\n方案1 - Cookie 认证：")
@@ -526,30 +646,52 @@ def main():
         sys.exit(1)
     
     # 检查服务器URL列表
-    if not login.server_list:
+    if not auto.server_list:
         print("❌ 错误：未设置服务器URL列表！")
         print("\n请在 GitHub Secrets 中设置：")
         print("WEIRDHOST_SERVER_URLS: https://hub.weirdhost.xyz/server/服务器ID1,https://hub.weirdhost.xyz/server/服务器ID2")
         print("\n示例: https://hub.weirdhost.xyz/server/abc12345,https://hub.weirdhost.xyz/server/abc67890")
         sys.exit(1)
     
-    # 执行续期任务
-    results = login.run()
+    print("🔧 配置检查通过")
+    print(f"📋 服务器数量: {len(auto.server_list)}")
+    print("=" * 50)
+    
+    # 执行自动任务
+    results = auto.run()
     
     # 写入README文件
-    login.write_readme_file(results)
+    auto.write_readme_file(results)
     
     print("=" * 50)
     print("📊 运行结果汇总:")
-    for result in results:
-        print(f"  - {result}")
+    
+    # 显示详细结果
+    for server_id, status in auto.server_results.items():
+        print(f"\n服务器: {server_id}")
+        print(f"  续期: {status['renew_status']}")
+        print(f"  启动: {status['start_status']}")
+    
+    # 统计结果
+    total = len(auto.server_list)
+    renew_success = sum(1 for s in auto.server_results.values() 
+                       if s['renew_status'] in ['renew_success', 'already_renewed'])
+    start_success = sum(1 for s in auto.server_results.values() 
+                       if s['start_status'] in ['start_success', 'already_started'])
+    
+    print("\n" + "=" * 50)
+    print(f"📈 统计信息:")
+    print(f"  总服务器数: {total}")
+    print(f"  续期成功率: {renew_success}/{total}")
+    print(f"  启动成功率: {start_success}/{total}")
+    print("=" * 50)
     
     # 检查是否有完全失败的情况
     if any("login_failed" in result or "error:" in result for result in results):
-        print("❌ 续期任务有失败的情况！")
+        print("❌ 任务有失败的情况！")
         sys.exit(1)
     else:
-        print("🎉 续期任务完成！")
+        print("🎉 自动续期和启动任务完成！")
         sys.exit(0)
 
 
