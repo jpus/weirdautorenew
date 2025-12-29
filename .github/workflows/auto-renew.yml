@@ -8,6 +8,7 @@ on:
 jobs:
   login-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # 设置30分钟超时，避免GitHub Actions默认6小时太长
     
     # 授予工作流写入仓库内容的权限
     permissions:
